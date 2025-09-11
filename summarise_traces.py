@@ -22,6 +22,7 @@ Options:
 import argparse
 
 from helpers import compare_multiple, print_nice
+from stats import print_with_stats
 
 
 def main():
@@ -66,7 +67,7 @@ def main():
     comparison_dict = compare_multiple(trace_files, parent_name)
 
     # Print nicely
-    print_nice(comparison_dict, trace_files, sort_option=sort_option)
+    print_with_stats(comparison_dict, trace_files, sort_option=sort_option)
 
 
 if __name__ == "__main__":

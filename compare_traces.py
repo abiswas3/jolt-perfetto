@@ -21,7 +21,6 @@ Options:
 """
 
 import argparse
-from pathlib import Path
 
 from helpers import compare_two, print_nice
 

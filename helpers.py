@@ -8,107 +8,182 @@ from perfetto.trace_processor import TraceProcessor
 
 def print_nice(comparison_dict, trace_files, sort_option="linear", max_name_width=40):
     """
-    Pretty-print a flat comparison dictionary with table-like formatting.
+    Pretty-print a comparison dictionary with table-like formatting for multiple traces.
 
-    Shows:
-    name | total_time_s_<trace1> | total_time_s_<trace2> | diff_time_s | ratio_time_s
+    Shows slice name and total_time/occurrences columns for each trace.
+    If more than 7 traces, only the first 7 are shown. Trace names are shortened
+    to first 5 characters + index for display.
 
     Parameters
     ----------
     comparison_dict : dict
-        Dictionary from compare_two(), keyed by slice name.
+        Dictionary from compare_multiple(), keyed by slice name.
     trace_files : list of str
-        Two trace file paths used for comparison. Used for headers.
+        Trace file paths used for headers.
     sort_option : str
-        Sorting method: 'linear' (insertion order), 'diff', 'time_a', 'time_b'.
+        Sorting method: 'linear' (insertion order), 'time_traceX' (by a specific trace).
     max_name_width : int
         Maximum width of slice name column (longer names truncated with '...').
     """
-    # ANSI color codes
-    RED = "\033[91m"
-    GREEN = "\033[92m"
-    RESET = "\033[0m"
-
     if not comparison_dict:
         print("No slices to display.")
         return
 
-    # Get headers from filenames
-    name_a = Path(trace_files[0]).name
-    name_b = Path(trace_files[1]).name
-    total_keys = [
-        k
-        for k in next(iter(comparison_dict.values())).keys()
-        if k.startswith("total_time_s_")
-    ]
+    # Limit number of traces to display
+    n_traces = min(len(trace_files), 7)
+    trace_files = trace_files[:n_traces]
+
+    # Shorten trace names for display
+    display_names = [f"{Path(f).stem[:5]}{i+1}" for i, f in enumerate(trace_files)]
+
+    # Gather total_time keys for the traces
+    total_keys = [f"total_time_s_{Path(f).stem}" for f in trace_files]
 
     # Compute column widths
     name_width = min(max(len(name) for name in comparison_dict.keys()), max_name_width)
-    width_1 = (
-        max(
-            len(total_keys[0]),
-            *(len(f"{v[total_keys[0]]:.6f}") for v in comparison_dict.values()),
+    col_widths = []
+    for key in total_keys:
+        col_width = (
+            max(
+                len(display_names[total_keys.index(key)]),
+                *(len(f"{v[key]:.6f}") for v in comparison_dict.values()),
+            )
+            + 2
         )
-        + 2
-    )
-    width_2 = (
-        max(
-            len(total_keys[1]),
-            *(len(f"{v[total_keys[1]]:.6f}") for v in comparison_dict.values()),
-        )
-        + 2
-    )
+        col_widths.append(col_width)
 
     # Header
-    header = (
-        f"{'Name'.ljust(name_width)}  "
-        f"{name_a.rjust(width_1)}  "
-        f"{name_b.rjust(width_2)}  Diff(s)    Ratio"
-    )
+    header = "Name".ljust(name_width)
+    for dn, w in zip(display_names, col_widths):
+        header += f"  {dn.rjust(w)}"
     print(header)
     print("-" * (len(header) + 2))
 
     # Decide sorting
     items = comparison_dict.items()
-    if sort_option == "diff":
-        items = sorted(items, key=lambda x: x[1]["diff_time_s"], reverse=True)
-    elif sort_option == "time_a":
-        items = sorted(items, key=lambda x: x[1][total_keys[0]], reverse=True)
-    elif sort_option == "time_b":
-        items = sorted(items, key=lambda x: x[1][total_keys[1]], reverse=True)
+    if sort_option.startswith("time_"):
+        trace_idx = int(sort_option.split("_")[1]) - 1
+        if 0 <= trace_idx < n_traces:
+            items = sorted(
+                items, key=lambda x: x[1][total_keys[trace_idx]], reverse=True
+            )
 
     # Print rows
     for name, stats in items:
         display_name = (
             name if len(name) <= max_name_width else name[: max_name_width - 3] + "..."
         )
-        total_a = stats[total_keys[0]]
-        total_b = stats[total_keys[1]]
-        diff = stats["diff_time_s"]
-        ratio = stats["ratio_time_s"]
-
-        # Safe ratio string
-        ratio_str = (
-            f"{ratio:.2f}" if ratio is not None and not (ratio != ratio) else "NaN"
-        )
-
-        # Color diff
-        if diff > 0:
-            diff_str = f"{GREEN}{diff:10.6f}{RESET}"
-        elif diff < 0:
-            diff_str = f"{RED}{diff:10.6f}{RESET}"
-        else:
-            diff_str = f"{diff:10.6f}"
-
-        line = (
-            f"{display_name.ljust(name_width)}  "
-            f"{total_a:>{width_1}.6f}  "
-            f"{total_b:>{width_2}.6f}  "
-            f"{diff_str}  "
-            f"{ratio_str:>6}"
-        )
+        line = display_name.ljust(name_width)
+        for key, w in zip(total_keys, col_widths):
+            line += f"  {stats[key]:>{w}.6f}"
         print(line)
     print()
+
+
+# def print_nice(comparison_dict, trace_files, sort_option="linear", max_name_width=40):
+#     """
+#     Pretty-print a flat comparison dictionary with table-like formatting.
+#
+#     Shows:
+#     name | total_time_s_<trace1> | total_time_s_<trace2> | diff_time_s | ratio_time_s
+#
+#     Parameters
+#     ----------
+#     comparison_dict : dict
+#         Dictionary from compare_two(), keyed by slice name.
+#     trace_files : list of str
+#         Two trace file paths used for comparison. Used for headers.
+#     sort_option : str
+#         Sorting method: 'linear' (insertion order), 'diff', 'time_a', 'time_b'.
+#     max_name_width : int
+#         Maximum width of slice name column (longer names truncated with '...').
+#     """
+#     # ANSI color codes
+#     RED = "\033[91m"
+#     GREEN = "\033[92m"
+#     RESET = "\033[0m"
+#
+#     if not comparison_dict:
+#         print("No slices to display.")
+#         return
+#
+#     # Get headers from filenames
+#     name_a = Path(trace_files[0]).name
+#     name_b = Path(trace_files[1]).name
+#     total_keys = [
+#         k
+#         for k in next(iter(comparison_dict.values())).keys()
+#         if k.startswith("total_time_s_")
+#     ]
+#
+#     # Compute column widths
+#     name_width = min(max(len(name) for name in comparison_dict.keys()), max_name_width)
+#     width_1 = (
+#         max(
+#             len(total_keys[0]),
+#             *(len(f"{v[total_keys[0]]:.6f}") for v in comparison_dict.values()),
+#         )
+#         + 2
+#     )
+#     width_2 = (
+#         max(
+#             len(total_keys[1]),
+#             *(len(f"{v[total_keys[1]]:.6f}") for v in comparison_dict.values()),
+#         )
+#         + 2
+#     )
+#
+#     # Header
+#     header = (
+#         f"{'Name'.ljust(name_width)}  "
+#         f"{name_a.rjust(width_1)}  "
+#         f"{name_b.rjust(width_2)}  Diff(s)    Ratio"
+#     )
+#     print(header)
+#     print("-" * (len(header) + 2))
+#
+#     # Decide sorting
+#     items = comparison_dict.items()
+#     if sort_option == "diff":
+#         items = sorted(items, key=lambda x: x[1]["diff_time_s"], reverse=True)
+#     elif sort_option == "time_a":
+#         items = sorted(items, key=lambda x: x[1][total_keys[0]], reverse=True)
+#     elif sort_option == "time_b":
+#         items = sorted(items, key=lambda x: x[1][total_keys[1]], reverse=True)
+#
+#     # Print rows
+#     for name, stats in items:
+#         display_name = (
+#             name if len(name) <= max_name_width else name[: max_name_width - 3] + "..."
+#         )
+#         total_a = stats[total_keys[0]]
+#         total_b = stats[total_keys[1]]
+#         diff = stats["diff_time_s"]
+#         ratio = stats["ratio_time_s"]
+#
+#         # Safe ratio string
+#         ratio_str = (
+#             f"{ratio:.2f}" if ratio is not None and not (ratio != ratio) else "NaN"
+#         )
+#
+#         # Color diff
+#         if diff > 0:
+#             diff_str = f"{GREEN}{diff:10.6f}{RESET}"
+#         elif diff < 0:
+#             diff_str = f"{RED}{diff:10.6f}{RESET}"
+#         else:
+#             diff_str = f"{diff:10.6f}"
+#
+#         line = (
+#             f"{display_name.ljust(name_width)}  "
+#             f"{total_a:>{width_1}.6f}  "
+#             f"{total_b:>{width_2}.6f}  "
+#             f"{diff_str}  "
+#             f"{ratio_str:>6}"
+#         )
+#         print(line)
+#     print()
+#
 
 
 def compute_breakdown(trace_file, parent_name):
@@ -195,6 +270,107 @@ def compute_breakdown(trace_file, parent_name):
     )
 
     return df_raw, df_breakdown
+
+
+from collections import OrderedDict
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+def compare_multiple(trace_files, parent_name):
+    """
+    Aggregate slice breakdowns for multiple Perfetto trace files under a given parent slice.
+
+    This function extracts all slices that occur within the time window of a
+    specified parent slice (`parent_name`) from multiple Perfetto trace files,
+    then aggregates their total duration and occurrences per slice name.
+
+    Parameters
+    ----------
+    trace_files : list of str
+        List of Perfetto trace JSON file paths.
+    parent_name : str
+        The parent slice name whose children should be analyzed.
+
+    Returns
+    -------
+    OrderedDict
+        Dictionary keyed by slice name:
+        {
+          "slice_name": {
+              "total_time_s_trace1": float,
+              "occurrences_trace1": int,
+              "total_time_s_trace2": float,
+              "occurrences_trace2": int,
+              ...
+          },
+          ...
+        }
+    """
+    if not trace_files:
+        raise ValueError("trace_files list must not be empty")
+
+    dfs = []
+    linear_dfs = []
+    trace_names = []
+
+    # Compute breakdowns for each trace
+    for tf in trace_files:
+        linear, agg = compute_breakdown(tf, parent_name)
+        linear_dfs.append(linear)
+        dfs.append(agg)
+        trace_names.append(Path(tf).stem)
+
+    # Merge all aggregated DataFrames on 'name'
+    df_merged = dfs[0].copy()
+    df_merged = df_merged.rename(
+        columns={
+            "total_time_s": f"total_time_s_{trace_names[0]}",
+            "occurrences": f"occurrences_{trace_names[0]}",
+        }
+    )
+
+    for i in range(1, len(dfs)):
+        df_temp = dfs[i].rename(
+            columns={
+                "total_time_s": f"total_time_s_{trace_names[i]}",
+                "occurrences": f"occurrences_{trace_names[i]}",
+            }
+        )
+        df_merged = pd.merge(df_merged, df_temp, on="name", how="outer")
+
+    # Fill missing slices with zeros
+    df_merged = df_merged.fillna(0)
+
+    # Determine order based on first trace
+    name_order = {
+        name: i for i, name in enumerate(linear_dfs[0]["name"].drop_duplicates())
+    }
+    df_merged["order"] = df_merged["name"].map(
+        lambda x: name_order.get(x, float("inf"))
+    )
+    df_merged = (
+        df_merged.sort_values("order", na_position="last")
+        .drop(columns="order")
+        .reset_index(drop=True)
+    )
+
+    # Convert to OrderedDict
+    comparison_dict = OrderedDict(
+        (
+            row["name"],
+            {
+                col: (int(row[col]) if col.startswith("occurrences") else row[col])
+                for col in df_merged.columns
+                if col != "name"
+            },
+        )
+        for _, row in df_merged.iterrows()
+    )
+
+    return comparison_dict
 
 
 def compare_two(trace_files, parent_name):

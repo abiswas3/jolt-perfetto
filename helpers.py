@@ -1,14 +1,28 @@
+from collections import OrderedDict
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from perfetto.trace_processor import TraceProcessor
 
 
-def print_nice(comparison_dict):
+def print_nice(comparison_dict, trace_files, sort_option="linear", max_name_width=40):
     """
     Pretty-print a flat comparison dictionary with table-like formatting.
 
     Shows:
-    name | total_time_s_small | total_time_s_large | diff_time_s | ratio_time_s
+    name | total_time_s_<trace1> | total_time_s_<trace2> | diff_time_s | ratio_time_s
+
+    Parameters
+    ----------
+    comparison_dict : dict
+        Dictionary from compare_two(), keyed by slice name.
+    trace_files : list of str
+        Two trace file paths used for comparison. Used for headers.
+    sort_option : str
+        Sorting method: 'linear' (insertion order), 'diff', 'time_a', 'time_b'.
+    max_name_width : int
+        Maximum width of slice name column (longer names truncated with '...').
     """
     # ANSI color codes
     RED = "\033[91m"
@@ -19,20 +33,57 @@ def print_nice(comparison_dict):
         print("No slices to display.")
         return
 
-    # Compute max width for the name column
-    name_width = max(len(name) for name in comparison_dict.keys())
+    # Get headers from filenames
+    name_a = Path(trace_files[0]).name
+    name_b = Path(trace_files[1]).name
+    total_keys = [
+        k
+        for k in next(iter(comparison_dict.values())).keys()
+        if k.startswith("total_time_s_")
+    ]
+
+    # Compute column widths
+    name_width = min(max(len(name) for name in comparison_dict.keys()), max_name_width)
+    width_1 = (
+        max(
+            len(total_keys[0]),
+            *(len(f"{v[total_keys[0]]:.6f}") for v in comparison_dict.values()),
+        )
+        + 2
+    )
+    width_2 = (
+        max(
+            len(total_keys[1]),
+            *(len(f"{v[total_keys[1]]:.6f}") for v in comparison_dict.values()),
+        )
+        + 2
+    )
+
+    # Header
     header = (
-        f"{'Name'.ljust(name_width)}  TimeSmall(s)  TimeLarge(s)   Diff(s)    Ratio"
+        f"{'Name'.ljust(name_width)}  "
+        f"{name_a.rjust(width_1)}  "
+        f"{name_b.rjust(width_2)}  Diff(s)    Ratio"
     )
     print(header)
     print("-" * (len(header) + 2))
 
-    # Sort by diff descending
-    for name, stats in sorted(
-        comparison_dict.items(), key=lambda x: x[1]["diff_time_s"], reverse=True
-    ):
-        total_small = stats["total_time_s_small"]
-        total_large = stats["total_time_s_large"]
+    # Decide sorting
+    items = comparison_dict.items()
+    if sort_option == "diff":
+        items = sorted(items, key=lambda x: x[1]["diff_time_s"], reverse=True)
+    elif sort_option == "time_a":
+        items = sorted(items, key=lambda x: x[1][total_keys[0]], reverse=True)
+    elif sort_option == "time_b":
+        items = sorted(items, key=lambda x: x[1][total_keys[1]], reverse=True)
+
+    # Print rows
+    for name, stats in items:
+        display_name = (
+            name if len(name) <= max_name_width else name[: max_name_width - 3] + "..."
+        )
+        total_a = stats[total_keys[0]]
+        total_b = stats[total_keys[1]]
         diff = stats["diff_time_s"]
         ratio = stats["ratio_time_s"]
 
@@ -41,7 +92,7 @@ def print_nice(comparison_dict):
             f"{ratio:.2f}" if ratio is not None and not (ratio != ratio) else "NaN"
         )
 
-        # Color the diff
+        # Color diff
         if diff > 0:
             diff_str = f"{GREEN}{diff:10.6f}{RESET}"
         elif diff < 0:
@@ -50,14 +101,13 @@ def print_nice(comparison_dict):
             diff_str = f"{diff:10.6f}"
 
         line = (
-            f"{name.ljust(name_width)}  "
-            f"{total_small:12.6f}  "
-            f"{total_large:12.6f}  "
+            f"{display_name.ljust(name_width)}  "
+            f"{total_a:>{width_1}.6f}  "
+            f"{total_b:>{width_2}.6f}  "
             f"{diff_str}  "
             f"{ratio_str:>6}"
         )
         print(line)
-
     print()
 
 
@@ -164,28 +214,28 @@ def compare_two(trace_files, parent_name):
          - first_ts: timestamp of first occurrence (used internally)
     2. Merges the two DataFrames on `name` (slice name).
     3. Computes:
-         - diff_time_s = total_time_s_large - total_time_s_small
-         - diff_occurrences = occurrences_large - occurrences_small
-         - ratio_time_s = total_time_s_large / total_time_s_small (NaN if denominator=0)
-    4. Returns a dictionary keyed by slice name with comparison metrics.
+         - diff_time_s = total_time_s_<trace2> - total_time_s_<trace1>
+         - diff_occurrences = occurrences_<trace2> - occurrences_<trace1>
+         - ratio_time_s = total_time_s_<trace2> / total_time_s_<trace1> (NaN if denominator=0)
+    4. Returns an OrderedDict keyed by slice name, preserving chronological order from the first trace.
 
     Parameters
     ----------
     trace_files : list of str
-        Exactly two Perfetto trace JSON file paths [small_trace, large_trace].
+        Exactly two Perfetto trace JSON file paths [trace1, trace2].
     parent_name : str
         The parent slice name whose children should be analyzed.
 
     Returns
     -------
-    dict
+    OrderedDict
         Dictionary keyed by slice name:
         {
           "slice_name": {
-              "total_time_s_small": float,
-              "total_time_s_large": float,
-              "occurrences_small": int,
-              "occurrences_large": int,
+              "total_time_s_<trace1>": float,
+              "total_time_s_<trace2>": float,
+              "occurrences_<trace1>": int,
+              "occurrences_<trace2>": int,
               "diff_time_s": float,
               "diff_occurrences": int,
               "ratio_time_s": float or NaN
@@ -201,19 +251,19 @@ def compare_two(trace_files, parent_name):
     >>> import pprint; pprint.pprint(comparison, indent=2)
     {
       "bind_parallel": {
-        "total_time_s_small": 0.123,
-        "total_time_s_large": 0.250,
-        "occurrences_small": 5,
-        "occurrences_large": 8,
+        "total_time_s_trace-small": 0.123,
+        "total_time_s_trace-large": 0.250,
+        "occurrences_trace-small": 5,
+        "occurrences_trace-large": 8,
         "diff_time_s": 0.127,
         "diff_occurrences": 3,
         "ratio_time_s": 2.032
       },
       "bind_serial": {
-        "total_time_s_small": 0.045,
-        "total_time_s_large": 0.030,
-        "occurrences_small": 2,
-        "occurrences_large": 1,
+        "total_time_s_trace-small": 0.045,
+        "total_time_s_trace-large": 0.030,
+        "occurrences_trace-small": 2,
+        "occurrences_trace-large": 1,
         "diff_time_s": -0.015,
         "diff_occurrences": -1,
         "ratio_time_s": 0.667
@@ -222,40 +272,63 @@ def compare_two(trace_files, parent_name):
     """
     assert len(trace_files) == 2
 
-    # Compute breakdowns
-    _df_small_linear, df_small = compute_breakdown(trace_files[0], parent_name)
-    _df_large_linear, df_large = compute_breakdown(trace_files[1], parent_name)
+    # Compute breakdowns (returns linear/raw and aggregated)
+    df_a_linear, df_a = compute_breakdown(trace_files[0], parent_name)
+    df_b_linear, df_b = compute_breakdown(trace_files[1], parent_name)
 
-    # Merge
+    # Map slice names to first occurrence index in first trace
+    name_order = {
+        name: i for i, name in enumerate(df_a_linear["name"].drop_duplicates())
+    }
+
+    # Merge aggregated data
     df_compare = pd.merge(
-        df_small, df_large, on="name", how="outer", suffixes=("_small", "_large")
+        df_a, df_b, on="name", how="outer", suffixes=("_a", "_b")
     ).fillna(0)
 
-    # Compute differences
-    df_compare["diff_time_s"] = (
-        df_compare["total_time_s_large"] - df_compare["total_time_s_small"]
-    )
-    df_compare["diff_occurrences"] = (
-        df_compare["occurrences_large"] - df_compare["occurrences_small"]
-    )
-    df_compare["ratio_time_s"] = np.where(
-        df_compare["total_time_s_small"] == 0,
-        np.nan,
-        df_compare["total_time_s_large"] / df_compare["total_time_s_small"],
+    # Add order column based on first trace
+    df_compare["order"] = df_compare["name"].map(
+        lambda x: name_order.get(x, float("inf"))
     )
 
-    # Convert to dict: slice_name -> values
-    comparison_dict = {
-        row["name"]: {
-            "total_time_s_small": row["total_time_s_small"],
-            "total_time_s_large": row["total_time_s_large"],
-            "occurrences_small": int(row["occurrences_small"]),
-            "occurrences_large": int(row["occurrences_large"]),
-            "diff_time_s": row["diff_time_s"],
-            "diff_occurrences": int(row["diff_occurrences"]),
-            "ratio_time_s": row["ratio_time_s"],
-        }
+    # Sort by first occurrence in first trace
+    df_compare = (
+        df_compare.sort_values("order", na_position="last")
+        .drop(columns="order")
+        .reset_index(drop=True)
+    )
+
+    # Compute differences and ratios
+    df_compare["diff_time_s"] = (
+        df_compare["total_time_s_b"] - df_compare["total_time_s_a"]
+    )
+    df_compare["diff_occurrences"] = (
+        df_compare["occurrences_b"] - df_compare["occurrences_a"]
+    )
+    df_compare["ratio_time_s"] = np.where(
+        df_compare["total_time_s_a"] == 0,
+        np.nan,
+        df_compare["total_time_s_b"] / df_compare["total_time_s_a"],
+    )
+
+    # Use trace file base names for dynamic field names
+    name_a = Path(trace_files[0]).stem
+    name_b = Path(trace_files[1]).stem
+
+    comparison_dict = OrderedDict(
+        (
+            row["name"],
+            {
+                f"total_time_s_{name_a}": row["total_time_s_a"],
+                f"total_time_s_{name_b}": row["total_time_s_b"],
+                f"occurrences_{name_a}": int(row["occurrences_a"]),
+                f"occurrences_{name_b}": int(row["occurrences_b"]),
+                "diff_time_s": row["diff_time_s"],
+                "diff_occurrences": int(row["diff_occurrences"]),
+                "ratio_time_s": row["ratio_time_s"],
+            },
+        )
         for _, row in df_compare.iterrows()
-    }
+    )
 
     return comparison_dict

@@ -7,7 +7,8 @@ given parent slice.
 
 The script extracts all slices that occur within the time window of a 
 specified parent slice, aggregates their total duration and occurrences per slice name, 
-and prints a comparison table with differences and ratios.
+and prints a 
+comparison table with differences and ratios.
 
 Usage:
     python compare_traces.py TRACE1 TRACE2 -p "Parent Slice Name" [-s SORT_OPTION]

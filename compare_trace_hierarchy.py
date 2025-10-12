@@ -33,6 +33,7 @@ Examples:
 import json
 import argparse
 import fnmatch
+import re
 from typing import Dict, List, Optional, Tuple
 
 
@@ -208,6 +209,66 @@ def format_diff(diff_us: float) -> str:
     return sign + format_duration(abs(diff_us))
 
 
+def visible_length(s: str) -> int:
+    """Calculate visible length of string, excluding ANSI color codes."""
+    # Remove ANSI escape sequences
+    ansi_escape = re.compile(r'\033\[[0-9;]*m')
+    return len(ansi_escape.sub('', s))
+
+
+def pad_with_color(s: str, width: int, align: str = '>') -> str:
+    """
+    Pad a string that may contain ANSI color codes.
+    
+    Args:
+        s: String to pad (may contain ANSI codes)
+        width: Desired visible width
+        align: Alignment ('>' for right, '<' for left, '^' for center)
+    """
+    visible_len = visible_length(s)
+    padding_needed = max(0, width - visible_len)
+    
+    if align == '>':
+        return ' ' * padding_needed + s
+    elif align == '<':
+        return s + ' ' * padding_needed
+    elif align == '^':
+        left_pad = padding_needed // 2
+        right_pad = padding_needed - left_pad
+        return ' ' * left_pad + s + ' ' * right_pad
+    return s
+
+
+def colorize_diff(diff_str: str, rel_change_str: str) -> tuple:
+    """
+    Add color coding to difference strings.
+    Red for slower (positive), green for faster (negative).
+    
+    Returns: (colored_diff_str, colored_rel_change_str)
+    """
+    # ANSI color codes
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    RESET = '\033[0m'
+    
+    # Determine color based on the sign
+    if diff_str.startswith('+') and diff_str not in ["NEW", "REMOVED"]:
+        color = RED  # Slower is bad (red)
+    elif diff_str.startswith('-'):
+        color = GREEN  # Faster is good (green)
+    else:
+        color = ''  # No change or special case
+    
+    if color:
+        colored_diff = f"{color}{diff_str}{RESET}"
+        colored_rel = f"{color}{rel_change_str}{RESET}"
+    else:
+        colored_diff = diff_str
+        colored_rel = rel_change_str
+    
+    return colored_diff, colored_rel
+
+
 def matches_pattern(name: str, pattern: str) -> bool:
     """Check if a name matches a glob pattern."""
     return fnmatch.fnmatch(name, pattern)
@@ -293,15 +354,28 @@ def print_hierarchy_comparison(slice1: Optional[TraceSlice], slice2: Optional[Tr
     if slice1 and slice2:
         diff = slice2.duration - slice1.duration
         diff_str = format_diff(diff)
-        pct_diff = pct2 - pct1
-        pct_diff_str = f"{pct_diff:+.1f}%"
+        # Calculate relative change as percentage
+        rel_change_pct = (diff / slice1.duration * 100.0) if slice1.duration > 0 else 0.0
+        rel_change_str = f"{rel_change_pct:+.1f}%"
+        # Apply color coding
+        diff_str, rel_change_str = colorize_diff(diff_str, rel_change_str)
+        # Pad after coloring
+        diff_str = pad_with_color(diff_str, 12, '>')
+        rel_change_str = pad_with_color(rel_change_str, 8, '>')
     else:
         diff_str = "NEW" if slice2 and not slice1 else "REMOVED"
-        pct_diff_str = ""
+        rel_change_str = ""
+        diff_str = f"{diff_str:>12}"
+        rel_change_str = f"{rel_change_str:>8}"
     
-    # Tree formatting
+    # Tree formatting with fixed-width name column
     connector = "└─ " if is_last else "├─ "
-    print(f"{prefix}{connector}{name:<40} {dur1_str:>12} ({pct1:>5.1f}%)  {dur2_str:>12} ({pct2:>5.1f}%)  {diff_str:>12} {pct_diff_str:>8}")
+    # Calculate padding needed to reach fixed column width (60 chars total for name+tree)
+    name_col_width = 60
+    current_length = len(prefix) + len(connector) + len(name)
+    padding = max(1, name_col_width - current_length)
+    
+    print(f"{prefix}{connector}{name}{' ' * padding}{dur1_str:>12} ({pct1:>5.1f}%)  {dur2_str:>12} ({pct2:>5.1f}%)  {diff_str} {rel_change_str}")
     
     # Prepare prefix for children
     if is_last:
@@ -367,19 +441,33 @@ def print_aggregated_comparison(agg1: Optional[AggregatedSlice], agg2: Optional[
     if agg1 and agg2:
         diff = agg2.total_duration - agg1.total_duration
         diff_str = format_diff(diff)
-        pct_diff = pct2 - pct1
-        pct_diff_str = f"{pct_diff:+.1f}%"
+        # Calculate relative change as percentage
+        rel_change_pct = (diff / agg1.total_duration * 100.0) if agg1.total_duration > 0 else 0.0
+        rel_change_str = f"{rel_change_pct:+.1f}%"
+        # Apply color coding
+        diff_str, rel_change_str = colorize_diff(diff_str, rel_change_str)
+        # Pad after coloring
+        diff_str = pad_with_color(diff_str, 12, '>')
+        rel_change_str = pad_with_color(rel_change_str, 8, '>')
         count_diff = agg2.count - agg1.count
         count_diff_str = f"({count_diff:+d})" if count_diff != 0 else ""
     else:
         diff_str = "NEW" if agg2 and not agg1 else "REMOVED"
-        pct_diff_str = ""
+        rel_change_str = ""
+        diff_str = f"{diff_str:>12}"
+        rel_change_str = f"{rel_change_str:>8}"
         count_diff_str = ""
     
-    # Tree formatting
+    # Tree formatting with fixed-width columns
     connector = "└─ " if is_last else "├─ "
     name_with_count = f"{name} {count1_str:>6} {count2_str:>6} {count_diff_str}"
-    print(f"{prefix}{connector}{name_with_count:<45} {dur1_str:>12} ({pct1:>5.1f}%)  {dur2_str:>12} ({pct2:>5.1f}%)  {diff_str:>12} {pct_diff_str:>8}")
+    
+    # Calculate padding for fixed column width (70 chars total for name+tree+counts)
+    name_col_width = 70
+    current_length = len(prefix) + len(connector) + len(name_with_count)
+    padding = max(1, name_col_width - current_length)
+    
+    print(f"{prefix}{connector}{name_with_count}{' ' * padding}{dur1_str:>12} ({pct1:>5.1f}%)  {dur2_str:>12} ({pct2:>5.1f}%)  {diff_str} {rel_change_str}")
     
     # Prepare prefix for children
     if is_last:
@@ -454,17 +542,29 @@ def print_flat_comparison(slices1: List[TraceSlice], slices2: List[TraceSlice],
             if count1 > 0 and count2 > 0:
                 diff = dur2 - dur1
                 diff_str = format_diff(diff)
+                rel_change_pct = (diff / dur1 * 100.0) if dur1 > 0 else 0.0
+                rel_change_str = f"({rel_change_pct:+.1f}%)"
+                # Apply color
+                diff_str, rel_change_str = colorize_diff(diff_str, rel_change_str)
+                # Create display with proper spacing (not using f-string padding after color)
+                diff_display = pad_with_color(diff_str, 12, '>') + " " + rel_change_str
             else:
-                diff_str = "NEW" if count2 > 0 else "REMOVED"
+                diff_display = "NEW" if count2 > 0 else "REMOVED"
+                diff_display = f"{diff_display:>12}"
             
             count1_str = f"×{count1}" if count1 > 0 else "---"
             count2_str = f"×{count2}" if count2 > 0 else "---"
             
-            print(f"{name:<40} {count1_str:>8} {dur1_str:>15} {pct1:>7.1f}%  {count2_str:>8} {dur2_str:>15} {pct2:>7.1f}%  {diff_str:>12}")
+            print(f"{name:<40} {count1_str:>8} {dur1_str:>15} {pct1:>7.1f}%  {count2_str:>8} {dur2_str:>15} {pct2:>7.1f}%  {diff_display}")
         
         print("-" * 130)
         total_diff = total_dur2 - total_dur1
-        print(f"{'Total':<40} {'×' + str(total_count1):>8} {format_duration(total_dur1):>15} {(total_dur1/root_duration1*100):>7.1f}%  {'×' + str(total_count2):>8} {format_duration(total_dur2):>15} {(total_dur2/root_duration2*100):>7.1f}%  {format_diff(total_diff):>12}")
+        total_rel_change = (total_diff / total_dur1 * 100.0) if total_dur1 > 0 else 0.0
+        total_diff_str = format_diff(total_diff)
+        total_rel_str = f"({total_rel_change:+.1f}%)"
+        total_diff_str, total_rel_str = colorize_diff(total_diff_str, total_rel_str)
+        total_diff_str = pad_with_color(total_diff_str, 12, '>')
+        print(f"{'Total':<40} {'×' + str(total_count1):>8} {format_duration(total_dur1):>15} {(total_dur1/root_duration1*100):>7.1f}%  {'×' + str(total_count2):>8} {format_duration(total_dur2):>15} {(total_dur2/root_duration2*100):>7.1f}%  {total_diff_str} {total_rel_str}")
     
     else:
         # Non-aggregated: match individual slices
@@ -507,14 +607,26 @@ def print_flat_comparison(slices1: List[TraceSlice], slices2: List[TraceSlice],
             if dur1 > 0 and dur2 > 0:
                 diff = dur2 - dur1
                 diff_str = format_diff(diff)
+                rel_change_pct = (diff / dur1 * 100.0) if dur1 > 0 else 0.0
+                rel_change_str = f"({rel_change_pct:+.1f}%)"
+                # Apply color
+                diff_str, rel_change_str = colorize_diff(diff_str, rel_change_str)
+                # Create display with proper spacing
+                diff_display = pad_with_color(diff_str, 12, '>') + " " + rel_change_str
             else:
-                diff_str = "NEW" if dur2 > 0 else "REMOVED"
+                diff_display = "NEW" if dur2 > 0 else "REMOVED"
+                diff_display = f"{diff_display:>12}"
             
-            print(f"{name:<45} {dur1_str:>15} {pct1:>7.1f}%  {dur2_str:>15} {pct2:>7.1f}%  {diff_str:>12}")
+            print(f"{name:<45} {dur1_str:>15} {pct1:>7.1f}%  {dur2_str:>15} {pct2:>7.1f}%  {diff_display}")
         
         print("-" * 120)
         total_diff = total_dur2 - total_dur1
-        print(f"{'Total':<45} {format_duration(total_dur1):>15} {(total_dur1/root_duration1*100):>7.1f}%  {format_duration(total_dur2):>15} {(total_dur2/root_duration2*100):>7.1f}%  {format_diff(total_diff):>12}")
+        total_rel_change = (total_diff / total_dur1 * 100.0) if total_dur1 > 0 else 0.0
+        total_diff_str = format_diff(total_diff)
+        total_rel_str = f"({total_rel_change:+.1f}%)"
+        total_diff_str, total_rel_str = colorize_diff(total_diff_str, total_rel_str)
+        total_diff_str = pad_with_color(total_diff_str, 12, '>')
+        print(f"{'Total':<45} {format_duration(total_dur1):>15} {(total_dur1/root_duration1*100):>7.1f}%  {format_duration(total_dur2):>15} {(total_dur2/root_duration2*100):>7.1f}%  {total_diff_str} {total_rel_str}")
 
 
 def main():
@@ -627,9 +739,11 @@ def main():
     
     mode = " - ".join(mode_parts)
     print(f"\nTrace Comparison ({mode}):")
-    print("=" * 120)
-    print(f"{'Slice':<40} {'Trace 1':>20}  {'Trace 2':>20}  {'Difference':>20}")
-    print("-" * 120)
+    print("=" * 130)
+    # Header with better alignment for fixed-width columns
+    header_width = 70 if args.aggregate else 60
+    print(f"{'Slice':<{header_width}} {'Trace 1':>20}  {'Trace 2':>20}  {'Diff (abs)':>14} {'Diff (%)':>6}")
+    print("-" * 130)
     
     # Compare roots
     root1 = roots_to_display1[0] if roots_to_display1 else None

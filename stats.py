@@ -2,84 +2,77 @@ def print_with_stats(
     comparison_dict, trace_files, sort_option="linear", max_name_width=40
 ):
     """
-    Pretty-print a comparison dictionary with table-like formatting for multiple traces.
+    Display comparison data as a pandas DataFrame.
 
-    Shows slice name, total_time_s for each trace, plus Range and Variance columns.
+    - If ≤ 7 traces: shows slice name, total_time_s for each trace, plus Max, Min, Median, Mean, Range, Ratio.
+    - If > 7 traces: shows only slice name and stats columns.
 
-    If more than 7 traces, only the first 7 are shown. Trace names shortened to first 5 chars + index.
+    Stats columns: Max, Min, Median, Mean, Range, Ratio.
     """
+
     from pathlib import Path
 
     import numpy as np
+    import pandas as pd
 
     if not comparison_dict:
         print("No slices to display.")
         return
 
-    # Limit number of traces to display
-    n_traces = min(len(trace_files), 7)
+    n_traces_total = len(trace_files)
+    show_all_columns = n_traces_total <= 7
+    n_traces = min(n_traces_total, 7)
     trace_files = trace_files[:n_traces]
 
     # Shorten trace names for display
     display_names = [f"{Path(f).stem[:5]}{i+1}" for i, f in enumerate(trace_files)]
-
-    # Gather total_time keys for the traces
     total_keys = [f"total_time_s_{Path(f).stem}" for f in trace_files]
 
-    # Compute column widths
-    name_width = min(max(len(name) for name in comparison_dict.keys()), max_name_width)
-    col_widths = []
-    for key in total_keys:
-        col_width = (
-            max(
-                len(display_names[total_keys.index(key)]),
-                *(len(f"{v[key]:.6f}") for v in comparison_dict.values()),
-            )
-            + 2
+    # Prepare the DataFrame
+    rows = []
+    index = []
+
+    for name, stats in comparison_dict.items():
+        values = [stats.get(k, 0.0) for k in total_keys]
+        max_val = max(values)
+        min_val = min(values)
+        median_val = np.median(values)
+        mean_val = np.mean(values)
+        rng = max_val - min_val
+        ratio = float("nan") if min_val == 0 else max_val / min_val
+
+        row = dict(zip(display_names, values)) if show_all_columns else {}
+        row.update(
+            {
+                "Max": max_val,
+                "Min": min_val,
+                "Median": median_val,
+                "Mean": mean_val,
+                "Range": rng,
+                "Ratio": ratio,
+            }
         )
-        col_widths.append(col_width)
 
-    # Widths for the new columns
-    range_width = max(5, len("Range")) + 2
-    var_width = max(8, len("Variance")) + 2
-
-    # Header
-    header = "Name".ljust(name_width)
-    for dn, w in zip(display_names, col_widths):
-        header += f"  {dn.rjust(w)}"
-    header += f"  {'Range'.rjust(range_width)}  {'Ratio'.rjust(var_width)}"
-    print(header)
-    print("-" * (len(header) + 2))
-
-    # Decide sorting
-    items = comparison_dict.items()
-    if sort_option.startswith("time_"):
-        trace_idx = int(sort_option.split("_")[1]) - 1
-        if 0 <= trace_idx < n_traces:
-            items = sorted(
-                items, key=lambda x: x[1][total_keys[trace_idx]], reverse=True
-            )
-
-    # Print rows
-    for name, stats in items:
-        display_name = (
+        rows.append(row)
+        index.append(
             name if len(name) <= max_name_width else name[: max_name_width - 3] + "..."
         )
-        line = display_name.ljust(name_width)
 
-        values = [stats[k] for k in total_keys]
+    df = pd.DataFrame(rows, index=index)
 
-        for k, w in zip(total_keys, col_widths):
-            line += f"  {stats[k]:>{w}.6f}"
+    # Sorting if required
+    if sort_option.startswith("time_") and show_all_columns:
+        trace_idx = int(sort_option.split("_")[1]) - 1
+        if 0 <= trace_idx < n_traces:
+            col_to_sort = display_names[trace_idx]
+            df = df.sort_values(by=col_to_sort, ascending=False)
 
-        # Compute max - min and variance
-        rng = max(values) - min(values)
-        # Compute max/min ratio safely
-        min_val = min(values)
-        if min_val == 0:
-            ratio = float("nan")
-        else:
-            ratio = max(values) / min_val
-        line += f"  {rng:>{range_width}.6f}  {ratio:>{var_width}.6f}"
-        print(line)
+    # Final display
+    if show_all_columns:
+        pd.set_option("display.width", None)
+        pd.set_option("display.max_columns", None)
+        print(df.round(6))
+    else:
+        print(df[["Max", "Min", "Median", "Mean", "Range", "Ratio"]].round(6))
+
     print()

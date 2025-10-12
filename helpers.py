@@ -253,6 +253,7 @@ def compute_breakdown(trace_file, parent_name):
         df_raw = tp.query(query).as_pandas_dataframe()
 
     if df_raw.empty:
+        print(trace_file)
         return pd.DataFrame(columns=["name", "total_time_s", "occurrences"])
 
     # Aggregate by name only (no depth)

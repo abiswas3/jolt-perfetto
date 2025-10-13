@@ -335,13 +335,8 @@ def main():
             return
         roots_to_display = [root]
     else:
-        # Auto-detect: use the longest root slice
-        if roots:
-            roots_to_display = sorted(roots, key=lambda s: s.dur, reverse=True)[:1]
-        else:
-            print("Error: No root slices found in trace.")
-            tp.close()
-            return
+        # Show ALL roots by default (entire trace)
+        roots_to_display = roots
     
     # Apply filtering if requested
     if args.filter:
@@ -386,6 +381,7 @@ def main():
     print(f"\nTrace Hierarchy ({mode}):")
     print("=" * 80)
     
+    # Display all roots
     for root in roots_to_display:
         if args.aggregate:
             agg_root = aggregate_slice(root)
@@ -398,4 +394,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        # Happens when piping to head/tail - not an error
+        import sys
+        sys.stderr.close()
+        pass

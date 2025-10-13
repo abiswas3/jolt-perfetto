@@ -133,8 +133,10 @@ def format_duration(duration_us: float) -> str:
 
 def format_diff(diff_us: float) -> str:
     """Format duration difference with +/- sign."""
-    sign = "+" if diff_us >= 0 else ""
-    return sign + format_duration(abs(diff_us))
+    if diff_us >= 0:
+        return "+" + format_duration(diff_us)
+    else:
+        return "-" + format_duration(abs(diff_us))
 
 
 def visible_length(s: str) -> int:
@@ -578,8 +580,9 @@ def main():
         roots_to_display1 = [root1] if root1 else []
         roots_to_display2 = [root2] if root2 else []
     else:
-        roots_to_display1 = sorted(roots1, key=lambda s: s.dur, reverse=True)[:1] if roots1 else []
-        roots_to_display2 = sorted(roots2, key=lambda s: s.dur, reverse=True)[:1] if roots2 else []
+        # Show ALL roots by default (entire trace)
+        roots_to_display1 = roots1
+        roots_to_display2 = roots2
     
     # Apply filtering if requested
     if args.filter:
@@ -633,21 +636,34 @@ def main():
     print(f"{'Slice':<{header_width}} {'Trace 1':>20}  {'Trace 2':>20}  {'Diff (abs)':>14} {'Diff (%)':>6}")
     print("-" * 130)
     
-    root1 = roots_to_display1[0] if roots_to_display1 else None
-    root2 = roots_to_display2[0] if roots_to_display2 else None
-    
-    if args.aggregate and root1:
-        agg1 = aggregate_slice(root1)
-        agg2 = aggregate_slice(root2) if root2 else None
-        print_aggregated_comparison(agg1, agg2)
-    else:
-        print_hierarchy_comparison(root1, root2)
-    
-    print()
+    # Compare roots - if multiple roots, compare each
+    if not args.filter or not args.flat:
+        # Match roots by name for comparison
+        roots1_by_name = {r.name: r for r in roots_to_display1}
+        roots2_by_name = {r.name: r for r in roots_to_display2}
+        all_root_names = sorted(set(roots1_by_name.keys()) | set(roots2_by_name.keys()))
+        
+        for root_name in all_root_names:
+            root1 = roots1_by_name.get(root_name)
+            root2 = roots2_by_name.get(root_name)
+            
+            if args.aggregate and (root1 or root2):
+                agg1 = aggregate_slice(root1) if root1 else None
+                agg2 = aggregate_slice(root2) if root2 else None
+                print_aggregated_comparison(agg1, agg2)
+            else:
+                print_hierarchy_comparison(root1, root2)
+            print()
     
     tp1.close()
     tp2.close()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        # Happens when piping to head/tail - not an error
+        import sys
+        sys.stderr.close()
+        pass

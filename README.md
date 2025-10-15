@@ -1,7 +1,14 @@
 
 # Perfetto Trace Analyzer
 
-Command-line tools to analyze and compare Perfetto trace JSON files with hierarchical visualization.
+Download the [trace_processor shell](https://perfetto.dev/docs/analysis/trace-processor).
+
+```zsh
+# Download prebuilts (Linux and Mac only)
+curl -LO https://get.perfetto.dev/trace_processor
+chmod +x ./trace_processor
+```
+
 
 ## Tools
 
@@ -22,6 +29,7 @@ Compare two trace files and show timing differences.
 
 ## Installation
 
+FIXME: this is wrong
 No installation required! Just Python 3.6+
 
 ```bash
